@@ -7,37 +7,36 @@ export function calculateRisk(data: SensorData): RiskResult {
   let score = 0;
   let eventType: RiskResult["eventType"];
 
-  // Gas
+  // GAS LEAK
   if (data.gas >= 60) {
-    score += 35;
+    score += 60;
     eventType = "GAS_LEAK";
   } else if (data.gas >= 30) {
-    score += 20;
+    score += 25;
   }
 
-  // Temperature
+  // TEMPERATURE
   if (data.temperature >= 50) {
-    score += 25;
+    score += 30;
     eventType = eventType || "FIRE";
   } else if (data.temperature >= 35) {
     score += 15;
   }
 
-  // Flame
+  // FLAME
   if (data.flame) {
     score += 40;
     eventType = "FIRE";
   }
 
-  // Water
+  // WATER LEAK
   if (data.water >= 60) {
-    score += 30;
+    score += 40;
     eventType = eventType || "WATER_LEAK";
   } else if (data.water >= 30) {
-    score += 15;
+    score += 20;
   }
 
-  // Cap score
   score = Math.min(score, 100);
 
   let severity: RiskResult["severity"];

@@ -17,4 +17,4 @@ build/
 .pio/
 
 .vscode/*
-!.vscode/extensions.json
+!.vscode/extensions.jsonbackend/.env
