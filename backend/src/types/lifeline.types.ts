@@ -35,3 +35,32 @@ export interface DeviceStatus {
   door: boolean;
   alarm: boolean;
 }
+
+export interface SensorReadingRecord extends SensorData {
+  id: string;
+  created_at: string;
+}
+
+export interface EmergencyEventRecord {
+  id: string;
+  device_id: string;
+  event_type: EmergencyType;
+  severity: Severity;
+  risk_score: number;
+  status: string;
+  triggered_at: string;
+  resolved_at: string | null;
+}
+
+export interface DeviceStatusRecord extends DeviceStatus {
+  id: string;
+  updated_at: string;
+}
+
+export interface EventActionRecord {
+  id: string;
+  event_id: string;
+  action: string;
+  status: string;
+  executed_at: string;
+}

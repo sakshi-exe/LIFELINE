@@ -1,6 +1,10 @@
 import { supabase } from "../config/supabase";
 import {
+  DeviceStatusRecord,
   DeviceStatus,
+  EmergencyEventRecord,
+  EventActionRecord,
+  SensorReadingRecord,
   SensorData,
   RiskResult,
 } from "../types/lifeline.types";
@@ -24,10 +28,119 @@ export async function saveSensorReading(
     .single();
 
   if (error) {
-    throw new Error(`Failed to save sensor reading: ${error.message}`);
+    throw new Error(
+      `Failed to save sensor reading: ${error.message}`
+    );
   }
 
   return reading;
+}
+
+export async function getLatestSensorReading(
+  deviceId: string
+): Promise<SensorReadingRecord | null> {
+  const { data: reading, error } = await supabase
+    .from("sensor_readings")
+    .select("*")
+    .eq("device_id", deviceId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Failed to fetch latest sensor reading: ${error.message}`
+    );
+  }
+
+  return reading as SensorReadingRecord | null;
+}
+
+export async function getSensorHistory(
+  deviceId: string,
+  limit: number
+): Promise<SensorReadingRecord[]> {
+  const { data, error } = await supabase
+    .from("sensor_readings")
+    .select("*")
+    .eq("device_id", deviceId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Failed to fetch sensor history: ${error.message}`);
+  }
+
+  return (data ?? []) as SensorReadingRecord[];
+}
+
+export async function getEmergencyEvents(
+  deviceId: string,
+  limit: number
+): Promise<EmergencyEventRecord[]> {
+  const { data, error } = await supabase
+    .from("emergency_events")
+    .select("*")
+    .eq("device_id", deviceId)
+    .order("triggered_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Failed to fetch emergency events: ${error.message}`);
+  }
+
+  return (data ?? []) as EmergencyEventRecord[];
+}
+
+export async function getActiveEmergencyEvent(
+  deviceId: string
+): Promise<EmergencyEventRecord | null> {
+  const { data, error } = await supabase
+    .from("emergency_events")
+    .select("*")
+    .eq("device_id", deviceId)
+    .eq("status", "ACTIVE")
+    .order("triggered_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to fetch active emergency: ${error.message}`);
+  }
+
+  return data as EmergencyEventRecord | null;
+}
+
+export async function getStoredDeviceStatus(
+  deviceId: string
+): Promise<DeviceStatusRecord | null> {
+  const { data, error } = await supabase
+    .from("device_status")
+    .select("*")
+    .eq("device_id", deviceId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to fetch device status: ${error.message}`);
+  }
+
+  return data as DeviceStatusRecord | null;
+}
+
+export async function getEventActions(
+  eventId: string
+): Promise<EventActionRecord[]> {
+  const { data, error } = await supabase
+    .from("event_actions")
+    .select("*")
+    .eq("event_id", eventId)
+    .order("executed_at", { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to fetch event actions: ${error.message}`);
+  }
+
+  return (data ?? []) as EventActionRecord[];
 }
 
 export async function createEmergencyEvent(
@@ -51,7 +164,9 @@ export async function createEmergencyEvent(
     .single();
 
   if (error) {
-    throw new Error(`Failed to create emergency event: ${error.message}`);
+    throw new Error(
+      `Failed to create emergency event: ${error.message}`
+    );
   }
 
   return event;
@@ -80,7 +195,9 @@ export async function saveDeviceStatus(
     .single();
 
   if (error) {
-    throw new Error(`Failed to save device status: ${error.message}`);
+    throw new Error(
+      `Failed to save device status: ${error.message}`
+    );
   }
 
   return data;
@@ -101,7 +218,9 @@ export async function saveEventAction(
     .single();
 
   if (error) {
-    throw new Error(`Failed to save event action: ${error.message}`);
+    throw new Error(
+      `Failed to save event action: ${error.message}`
+    );
   }
 
   return data;

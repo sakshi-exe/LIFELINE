@@ -1,8 +1,25 @@
 import { Router } from "express";
-import { receiveSensorData } from "../controllers/sensor.controller";
+
+import {
+  receiveSensorData,
+  getLatestSensorData,
+  getSensorHistoryData,
+} from "../controllers/sensor.controller";
 
 const router = Router();
 
-router.post("/", receiveSensorData);
+// Receive and process sensor data
+router.post(
+  "/",
+  receiveSensorData
+);
+
+router.get("/history/:deviceId", getSensorHistoryData);
+
+// Get latest sensor reading for a device
+router.get(
+  "/:deviceId",
+  getLatestSensorData
+);
 
 export default router;

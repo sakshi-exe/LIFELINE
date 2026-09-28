@@ -1,12 +1,18 @@
 import { Request, Response } from "express";
+
 import { calculateRisk } from "../engine/risk.engine";
+
 import { handleEmergency } from "../services/emergency.service";
+
 import {
   saveSensorReading,
+  getLatestSensorReading,
+  getSensorHistory,
   createEmergencyEvent,
   saveDeviceStatus,
   saveEventAction,
 } from "../services/supabase.service";
+import { isValidDeviceId, parseListLimit } from "../utils/validators";
 
 export async function receiveSensorData(
   req: Request,
@@ -29,10 +35,14 @@ export async function receiveSensorData(
 
     let event = null;
     let deviceStatus = null;
+
     const actions: unknown[] = [];
 
     // 4. Persist emergency event + actions
-    if (emergency.triggered && emergency.eventType) {
+    if (
+      emergency.triggered &&
+      emergency.eventType
+    ) {
       event = await createEmergencyEvent(
         sensorData.device_id,
         risk
@@ -68,9 +78,11 @@ export async function receiveSensorData(
       event,
       actions,
     });
-
   } catch (error) {
-    console.error("Sensor processing error:", error);
+    console.error(
+      "Sensor processing error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -78,6 +90,77 @@ export async function receiveSensorData(
         error instanceof Error
           ? error.message
           : "Failed to process sensor data",
+    });
+  }
+}
+
+export async function getLatestSensorData(
+  req: Request,
+  res: Response
+) {
+  try {
+    const { deviceId } = req.params;
+
+    if (!isValidDeviceId(deviceId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid device ID",
+      });
+    }
+
+    const reading =
+      await getLatestSensorReading(deviceId);
+
+    if (!reading) {
+      return res.status(404).json({
+        success: false,
+        message: `No sensor readings found for device ${deviceId}`,
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: reading,
+    });
+  } catch (error) {
+    console.error(
+      "Latest sensor fetch error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch latest sensor data",
+    });
+  }
+}
+
+export async function getSensorHistoryData(
+  req: Request,
+  res: Response
+) {
+  const { deviceId } = req.params;
+  const limit = parseListLimit(req.query.limit, 30);
+
+  if (!isValidDeviceId(deviceId)) {
+    return res.status(400).json({ success: false, message: "Invalid device ID" });
+  }
+
+  if (limit === null) {
+    return res.status(400).json({ success: false, message: "Limit must be an integer from 1 to 100" });
+  }
+
+  try {
+    const readings = await getSensorHistory(deviceId, limit);
+    return res.json({ success: true, data: readings });
+  } catch (error) {
+    console.error("Sensor history fetch error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Failed to fetch sensor history",
     });
   }
 }
