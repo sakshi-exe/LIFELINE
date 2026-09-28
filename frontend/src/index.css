@@ -1,0 +1,183 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+@import "tailwindcss";
+
+:root {
+  font-family: "Manrope", ui-sans-serif, system-ui, sans-serif;
+
+  color: #172033;
+  background: #edf3f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: #edf3f8;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: #edf3f8;
+}
+
+button {
+  font: inherit;
+}
+
+/* ================= TYPOGRAPHY ================= */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.font-mono,
+code,
+pre {
+  font-family: "JetBrains Mono", monospace;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.22);
+}
+
+/* ================= PAGE ENTRANCE ================= */
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.delay-100 {
+  animation-delay: 100ms;
+}
+
+.delay-150 {
+  animation-delay: 150ms;
+}
+
+.delay-500 {
+  animation-delay: 500ms;
+}
+
+/* ================= EMERGENCY ================= */
+
+@keyframes alert-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+.animate-alert {
+  animation: alert-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(1.12);
+  }
+}
+
+.animate-pulse-soft {
+  animation: soft-pulse 3s ease-in-out infinite;
+}
+
+/* ================= RISK GAUGE ================= */
+
+.risk-progress {
+  animation: risk-fill 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  stroke-dashoffset: 477;
+}
+
+@keyframes risk-fill {
+  from {
+    stroke-dashoffset: 477;
+  }
+
+  to {
+    stroke-dashoffset: 119;
+  }
+}
+
+/* ================= SENSOR SIGNAL ================= */
+
+.signal-bar {
+  transform-origin: bottom;
+  animation: bar-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes bar-rise {
+  from {
+    opacity: 0;
+    transform: scaleY(0.15);
+  }
+
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+/* ================= AUTOPILOT SEQUENCE ================= */
+
+.autopilot-row {
+  opacity: 0;
+  animation: sequence-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes sequence-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ================= ACCESSIBILITY ================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
