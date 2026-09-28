@@ -5,6 +5,7 @@ import {
 	getActiveEmergencyEvent,
 	getEmergencyEvents,
 	getEventActions,
+	resolveEmergencyEvent,
 	saveDeviceStatus,
 	saveEventAction,
 } from "../services/supabase.service";
@@ -72,6 +73,27 @@ export async function getActionsForEvent(req: Request, res: Response) {
 		return res.status(500).json({
 			success: false,
 			message: error instanceof Error ? error.message : "Failed to fetch event actions",
+		});
+	}
+}
+
+export async function resolveEmergency(req: Request, res: Response) {
+	const { eventId } = req.params;
+	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(eventId)) {
+		return res.status(400).json({ success: false, message: "Invalid event ID" });
+	}
+
+	try {
+		const result = await resolveEmergencyEvent(eventId);
+		if (!result) {
+			return res.status(404).json({ success: false, message: "Emergency event not found" });
+		}
+		return res.json({ success: true, data: result.event, alreadyResolved: result.alreadyResolved });
+	} catch (error) {
+		console.error("Emergency resolve error:", error);
+		return res.status(500).json({
+			success: false,
+			message: error instanceof Error ? error.message : "Failed to resolve emergency",
 		});
 	}
 }

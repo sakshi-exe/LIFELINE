@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Activity,
@@ -25,6 +25,9 @@ import {
 import {
   EmergencyEvent,
   EventAction,
+  SensorRisk,
+  checkBackendHealth,
+  getActiveEmergency,
   getDeviceStatus,
   getEmergencyEvents,
   getEventActions,
@@ -32,10 +35,11 @@ import {
   getSensorHistory,
   SensorReading,
   StoredDeviceStatus,
+  resolveEmergency,
+  sendSensorData,
   triggerManualEmergency,
 } from "./services/api";
-
-type Severity = "NORMAL" | "WARNING" | "CRITICAL";
+import { connectRealtime, RealtimeConnectionState } from "./services/realtime";
 
 type SensorCard = {
   label: string;
@@ -57,70 +61,29 @@ type ActionItem = {
   icon: typeof LockKeyhole;
 };
 
-function calculateRisk(sensor: SensorReading) {
-  let score = 0;
+const simulationScenarios = [
+  { name: "NORMAL", description: "All monitored readings remain within normal ranges.", payload: { gas: 10, temperature: 28, humidity: 40, flame: false, motion: false, water: 5 } },
+  { name: "GAS LEAK", description: "High gas reading with elevated temperature.", payload: { gas: 80, temperature: 45, humidity: 35, flame: false, motion: true, water: 5 } },
+  { name: "FIRE", description: "Flame detected with high temperature.", payload: { gas: 20, temperature: 70, humidity: 30, flame: true, motion: true, water: 5 } },
+  { name: "WATER LEAK", description: "Water hazard plus moderate readings to cross the critical score threshold.", payload: { gas: 30, temperature: 35, humidity: 50, flame: false, motion: false, water: 80 } },
+  { name: "INTRUSION", description: "Motion detected while other hazard sensors remain normal.", payload: { gas: 10, temperature: 28, humidity: 40, flame: false, motion: true, water: 5 } },
+] as const;
 
-  if (sensor.gas >= 60) {
-    score += 60;
-  } else if (sensor.gas >= 30) {
-    score += 25;
+function getLastSimulationReadingId(): string | null {
+  try {
+    return localStorage.getItem("lifeline:last-simulation-reading");
+  } catch {
+    return null;
   }
-
-  if (sensor.temperature >= 50) {
-    score += 30;
-  } else if (sensor.temperature >= 35) {
-    score += 15;
-  }
-
-  if (sensor.flame) {
-    score += 40;
-  }
-
-  if (sensor.water >= 60) {
-    score += 40;
-  } else if (sensor.water >= 30) {
-    score += 20;
-  }
-
-  score = Math.min(score, 100);
-
-  let severity: Severity;
-
-  if (score >= 61) {
-    severity = "CRITICAL";
-  } else if (score >= 31) {
-    severity = "WARNING";
-  } else {
-    severity = "NORMAL";
-  }
-
-  let eventType: string | null = null;
-
-  if (sensor.gas >= 60) {
-    eventType = "GAS_LEAK";
-  }
-  if (sensor.temperature >= 50) {
-    eventType = eventType || "FIRE";
-  }
-  if (sensor.flame) {
-    eventType = "FIRE";
-  }
-  if (sensor.water >= 60) {
-    eventType = eventType || "WATER_LEAK";
-  }
-
-  return {
-    score,
-    severity,
-    eventType,
-  };
 }
 
 function App() {
   const deviceId = "LIFELINE-001";
   const [sensorData, setSensorData] =
     useState<SensorReading | null>(null);
+  const [sensorRisk, setSensorRisk] = useState<SensorRisk | null>(null);
   const [events, setEvents] = useState<EmergencyEvent[]>([]);
+  const [activeEvent, setActiveEvent] = useState<EmergencyEvent | null>(null);
   const [deviceStatus, setDeviceStatus] =
     useState<StoredDeviceStatus | null>(null);
   const [eventActions, setEventActions] =
@@ -129,61 +92,127 @@ function App() {
     useState<SensorReading[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [eventError, setEventError] = useState<string | null>(null);
+  const [backendState, setBackendState] = useState<"checking" | "online" | "degraded" | "offline">("checking");
+  const [realtimeState, setRealtimeState] = useState<RealtimeConnectionState>("CONNECTING");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "events">("dashboard");
   const [manualPending, setManualPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [resolvePending, setResolvePending] = useState(false);
+  const [selectedEventType, setSelectedEventType] = useState("ALL");
+  const [selectedEventStatus, setSelectedEventStatus] = useState("ALL");
+  const [simulationPending, setSimulationPending] = useState<string | null>(null);
+  const [simulationMessage, setSimulationMessage] = useState<string | null>(null);
+  const simulatedReadingId = useRef<string | null>(getLastSimulationReadingId());
+  const [simulatedReadings, setSimulatedReadings] = useState(false);
+  const refreshNow = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     let mounted = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let realtimeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let realtimeVerificationTimer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
+    let refreshing = false;
+    let refreshAgain = false;
 
-    const refresh = async () => {
-      try {
-        const [sensorResponse, eventList, status, history] = await Promise.all([
-          getSensorData(deviceId, controller.signal),
-          getEmergencyEvents(deviceId, 20, controller.signal),
-          getDeviceStatus(deviceId, controller.signal),
-          getSensorHistory(deviceId, 30, controller.signal),
-        ]);
-        const latestEvent = eventList.find((event) => event.status === "ACTIVE")
-          ?? eventList[0];
-        const actions = latestEvent
-          ? await getEventActions(latestEvent.id, controller.signal)
-          : [];
+    const refresh = async (): Promise<void> => {
+      if (refreshing) {
+        refreshAgain = true;
+        return;
+      }
+      refreshing = true;
+      const [health, sensor, eventList, active, status, history] = await Promise.allSettled([
+        checkBackendHealth(controller.signal),
+        getSensorData(deviceId, controller.signal),
+        getEmergencyEvents(deviceId, 20, controller.signal),
+        getActiveEmergency(deviceId, controller.signal),
+        getDeviceStatus(deviceId, controller.signal),
+        getSensorHistory(deviceId, 30, controller.signal),
+      ]);
 
-        if (mounted && sensorResponse.data) {
-          setSensorData(sensorResponse.data);
-          setEvents(eventList);
-          setDeviceStatus(status);
-          setSensorHistory([...history].reverse());
-          setEventActions(actions);
-          setLastUpdated(new Date());
+      if (mounted && !controller.signal.aborted) {
+        if (health.status === "fulfilled") {
+          setBackendState(health.value.status === "healthy" ? "online" : "degraded");
+        } else {
+          setBackendState("offline");
+        }
+        if (sensor.status === "fulfilled") {
+          setSensorData(sensor.value.data);
+          setSensorRisk(sensor.value.risk);
+          setSimulatedReadings(sensor.value.data.id === simulatedReadingId.current);
           setError(null);
+          setLastUpdated(new Date());
+        } else {
+          setError(sensor.reason instanceof Error ? sensor.reason.message : "Sensor API unavailable");
         }
-      } catch (err) {
-        if (mounted && !controller.signal.aborted) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Failed to fetch sensor data"
-          );
+        if (eventList.status === "fulfilled" && active.status === "fulfilled") {
+          setEvents(eventList.value);
+          setActiveEvent(active.value);
+          setEventError(null);
+          const actionEvent = active.value ?? eventList.value[0] ?? null;
+          if (actionEvent) {
+            try {
+              setEventActions(await getEventActions(actionEvent.id, controller.signal));
+            } catch (actionFailure) {
+              setEventError(actionFailure instanceof Error ? actionFailure.message : "Event actions unavailable");
+            }
+          } else {
+            setEventActions([]);
+          }
+        } else {
+          const failure = eventList.status === "rejected" ? eventList.reason : active.status === "rejected" ? active.reason : null;
+          setEventError(failure instanceof Error ? failure.message : "Emergency event API unavailable");
         }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-          timer = setTimeout(refresh, 3000);
+        if (status.status === "fulfilled") setDeviceStatus(status.value);
+        if (history.status === "fulfilled") setSensorHistory([...history.value].reverse());
+        setLoading(false);
+      }
+
+      refreshing = false;
+      if (mounted) {
+        if (refreshAgain) {
+          refreshAgain = false;
+          timer = setTimeout(() => void refresh(), 0);
+        } else {
+          timer = setTimeout(() => void refresh(), 3000);
         }
       }
     };
 
+    refreshNow.current = refresh;
     void refresh();
+
+    const disconnectRealtime = connectRealtime({
+      deviceId,
+      onStateChange: (state) => {
+        setRealtimeState(state);
+        if (state === "CONNECTED" && realtimeVerificationTimer) {
+          clearTimeout(realtimeVerificationTimer);
+          realtimeVerificationTimer = undefined;
+        }
+      },
+      onChange: () => {
+        if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+        realtimeRefreshTimer = setTimeout(() => {
+          if (timer) clearTimeout(timer);
+          void refresh();
+        }, 100);
+      },
+    });
+    realtimeVerificationTimer = setTimeout(() => {
+      if (mounted) setRealtimeState((state) => state === "CONNECTING" ? "DEGRADED" : state);
+    }, 10000);
 
     return () => {
       mounted = false;
       controller.abort();
+      disconnectRealtime();
+      refreshNow.current = async () => {};
       if (timer) clearTimeout(timer);
+      if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+      if (realtimeVerificationTimer) clearTimeout(realtimeVerificationTimer);
     };
   }, [deviceId]);
 
@@ -207,7 +236,7 @@ function App() {
     );
   }
 
-  if (error || !sensorData) {
+  if (!sensorData) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#edf3f8] px-6">
         <div className="max-w-md rounded-[24px] border border-red-200 bg-white p-8 text-center shadow-xl">
@@ -216,15 +245,15 @@ function App() {
           </div>
 
           <h1 className="mt-5 text-lg font-bold text-slate-800">
-            LIFELINE Connection Error
+            {backendState === "offline" ? "SYSTEM OFFLINE" : "LIFELINE DATA UNAVAILABLE"}
           </h1>
 
           <p className="mt-2 text-sm leading-6 text-slate-500">
-            {error || "No sensor data available."}
+            {error || "Waiting for the first sensor reading."}
           </p>
 
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => void refreshNow.current()}
             className="mt-6 rounded-xl bg-slate-950 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-slate-800"
           >
             RETRY CONNECTION
@@ -234,25 +263,38 @@ function App() {
     );
   }
 
-  const risk = calculateRisk(sensorData);
-  const activeEvent = events.find((event) => event.status === "ACTIVE") ?? null;
-  const eventType = activeEvent?.event_type ?? risk.eventType;
-  const severity = activeEvent?.severity ?? risk.severity;
+  const risk = sensorRisk ?? { score: 0, severity: "NORMAL" as const };
+  const eventType = activeEvent?.event_type;
+  const severity = activeEvent?.severity ?? "NORMAL";
   const isEmergency = activeEvent !== null;
+  const systemState = backendState === "offline"
+    ? "SYSTEM OFFLINE"
+    : backendState === "degraded" || Boolean(error || eventError) || realtimeState === "DEGRADED" || realtimeState === "DISCONNECTED"
+      ? "SYSTEM DEGRADED"
+      : backendState === "online"
+        ? "SYSTEM ONLINE"
+        : "CHECKING SYSTEM";
+  const realtimeLabel = backendState === "offline"
+    ? "REALTIME DISCONNECTED"
+    : realtimeState === "CONNECTED"
+      ? "REALTIME CONNECTED"
+      : realtimeState === "CONNECTING"
+        ? "REALTIME CONNECTING · POLLING ACTIVE"
+        : "POLLING FALLBACK";
 
-  const eventTitle = eventType
-    ? {
+  const eventTitle = isEmergency && eventType
+    ? ({
         GAS_LEAK: "Gas Leak Detected",
         FIRE: "Fire Detected",
         WATER_LEAK: "Water Leak Detected",
         INTRUSION: "Intrusion Detected",
         MANUAL_EMERGENCY: "Manual Emergency",
-      }[eventType]
-    : severity === "WARNING"
-      ? "Potential Hazard Detected"
-      : "Environment Normal";
+      } as Record<string, string>)[eventType]
+    : "No Active Emergency";
 
-  const eventDescription = eventType === "GAS_LEAK"
+  const eventDescription = !isEmergency
+    ? "No active emergency is recorded. Current sensor risk is assessed separately below."
+    : eventType === "GAS_LEAK"
     ? "Gas concentration crossed the critical threshold. LIFELINE initiated the recorded safety protocol."
     : eventType === "FIRE"
       ? "Flame or high temperature triggered the fire emergency protocol."
@@ -393,6 +435,10 @@ function App() {
     { label: "Door", value: deviceStatus ? deviceStatus.door ? "UNLOCKED" : "LOCKED" : "NO DATA", icon: DoorOpen },
     { label: "Alarm", value: deviceStatus ? deviceStatus.alarm ? "ON" : "OFF" : "NO DATA", icon: Bell },
   ];
+  const filteredEvents = [...events]
+    .sort((left, right) => Date.parse(right.triggered_at) - Date.parse(left.triggered_at))
+    .filter((event) => selectedEventType === "ALL" || event.event_type === selectedEventType)
+    .filter((event) => selectedEventStatus === "ALL" || event.status === selectedEventStatus);
 
   return (
     <div className="min-h-screen bg-[#edf3f8] text-[#172033]">
@@ -442,14 +488,14 @@ function App() {
                 Autopilot
               </span>
 
-              <span className={`flex items-center gap-1.5 text-[9px] font-bold ${error ? "text-amber-600" : isEmergency ? "text-red-600" : "text-emerald-600"}`}>
-                <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${error ? "bg-amber-500" : isEmergency ? "bg-red-500" : "bg-emerald-500"}`} />
-                {error ? "STALE" : isEmergency ? "ACTIVE" : "MONITORING"}
+              <span className={`flex items-center gap-1.5 text-[9px] font-bold ${backendState === "offline" ? "text-red-600" : backendState === "degraded" || error || eventError ? "text-amber-600" : isEmergency ? "text-red-600" : "text-emerald-600"}`}>
+                <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${backendState === "offline" ? "bg-red-500" : backendState === "degraded" || error || eventError ? "bg-amber-500" : isEmergency ? "bg-red-500" : "bg-emerald-500"}`} />
+                {backendState === "offline" ? "OFFLINE" : backendState === "degraded" || error || eventError ? "DEGRADED" : isEmergency ? "ACTIVE" : "MONITORING"}
               </span>
             </div>
 
             <div className="mt-3 text-[11px] leading-5 text-slate-500">
-              Autonomous emergency response is enabled and monitoring the home.
+              Prototype response is recording simulated actuator states only.
             </div>
           </div>
         </nav>
@@ -470,9 +516,9 @@ function App() {
               </div>
             </div>
 
-            <span className={`flex items-center gap-1.5 text-[9px] font-bold ${error ? "text-amber-600" : "text-emerald-600"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${error ? "bg-amber-500" : "bg-emerald-500"}`} />
-              {error ? "STALE" : "ONLINE"}
+            <span className={`flex items-center gap-1.5 text-[9px] font-bold ${backendState === "offline" ? "text-red-600" : backendState === "degraded" || error ? "text-amber-600" : "text-emerald-600"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${backendState === "offline" ? "bg-red-500" : backendState === "degraded" || error ? "bg-amber-500" : "bg-emerald-500"}`} />
+              {backendState === "offline" ? "OFFLINE" : backendState === "degraded" || error ? "DEGRADED" : "ONLINE"}
             </span>
           </div>
         </div>
@@ -518,13 +564,16 @@ function App() {
               </div>
             </div>
 
-            <div className={`flex items-center gap-2 rounded-full border px-3.5 py-2 shadow-sm ${error ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`}>
-              <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${error ? "bg-amber-500" : "bg-emerald-500"}`} />
+            <div className={`flex items-center gap-2 rounded-full border px-3.5 py-2 shadow-sm ${backendState === "offline" ? "border-red-200 bg-red-50" : systemState === "SYSTEM ONLINE" ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+              <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${backendState === "offline" ? "bg-red-500" : systemState === "SYSTEM ONLINE" ? "bg-emerald-500" : "bg-amber-500"}`} />
 
-              <span className={`text-[9px] font-bold tracking-[0.1em] ${error ? "text-amber-700" : "text-emerald-700"}`}>
-                {error ? "STALE DATA" : "SYSTEM ONLINE"}
+              <span className={`text-[9px] font-bold tracking-[0.1em] ${backendState === "offline" ? "text-red-700" : systemState === "SYSTEM ONLINE" ? "text-emerald-700" : "text-amber-700"}`}>
+                {systemState}
               </span>
             </div>
+            <span aria-live="polite" className={`hidden text-[8px] font-bold tracking-[0.08em] sm:inline ${realtimeState === "CONNECTED" ? "text-emerald-700" : "text-slate-500"}`}>
+              {realtimeLabel}
+            </span>
           </div>
         </header>
 
@@ -534,6 +583,11 @@ function App() {
             <div className="mb-5 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
               <RefreshCw className="h-4 w-4 shrink-0" />
               Showing the last successful readings. Refresh failed: {error}
+            </div>
+          )}
+          {eventError && (
+            <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              Emergency event data is stale: {eventError}
             </div>
           )}
           {notice && (
@@ -608,23 +662,19 @@ function App() {
                     >
                       {isEmergency
                         ? "Critical Emergency"
-                        : severity === "WARNING"
-                          ? "Warning"
-                          : "System Safe"}
+                        : "No Active Emergency"}
                     </span>
 
                     <span
                       className={`rounded-full px-2.5 py-1 text-[8px] font-bold tracking-wider ${
                         isEmergency
                           ? "bg-red-50 text-red-500"
-                          : risk.severity === "WARNING"
-                            ? "bg-amber-50 text-amber-600"
-                            : "bg-emerald-50 text-emerald-600"
+                          : "bg-emerald-50 text-emerald-600"
                       }`}
                     >
                       {isEmergency
                         ? "ACTIVE"
-                        : severity}
+                        : "NO ACTIVE EVENT"}
                     </span>
 
                     {isEmergency && (
@@ -649,10 +699,7 @@ function App() {
 
                 <Meta
                   label="EVENT TYPE"
-                  value={
-                    eventType ||
-                    "NORMAL"
-                  }
+                  value={eventType || "NONE"}
                   danger={isEmergency}
                 />
 
@@ -666,7 +713,7 @@ function App() {
                   value={
                     isEmergency
                       ? "ACTIVE"
-                      : severity
+                      : "NO ACTIVE EVENT"
                   }
                   danger={isEmergency}
                 />
@@ -685,6 +732,36 @@ function App() {
             </div>
           </section>
 
+          {activeEvent && (
+            <section className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <div>
+                <div className="text-[10px] font-extrabold text-amber-800">ACTIVE EVENT {activeEvent.event_type}</div>
+                <div className="mt-1 text-[9px] text-amber-700">Resolve only after the hazard has been addressed.</div>
+              </div>
+              <button
+                type="button"
+                disabled={resolvePending}
+                onClick={async () => {
+                  if (!window.confirm(`Resolve ${activeEvent.event_type} event ${activeEvent.id}?`)) return;
+                  setResolvePending(true);
+                  setNotice(null);
+                  try {
+                    await resolveEmergency(activeEvent.id);
+                    setNotice(`${activeEvent.event_type} marked RESOLVED.`);
+                    await refreshNow.current();
+                  } catch (resolveError) {
+                    setEventError(resolveError instanceof Error ? resolveError.message : "Could not resolve event");
+                  } finally {
+                    setResolvePending(false);
+                  }
+                }}
+                className="rounded-lg border border-amber-300 bg-white px-4 py-2 text-[9px] font-extrabold tracking-wider text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+              >
+                {resolvePending ? "RESOLVING..." : "RESOLVE EMERGENCY"}
+              </button>
+            </section>
+          )}
+
           <section className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50/80 p-4">
             <div>
               <div className="text-xs font-extrabold tracking-wide text-red-700">MANUAL EMERGENCY</div>
@@ -700,6 +777,7 @@ function App() {
                 try {
                   await triggerManualEmergency(deviceId);
                   setNotice("Manual emergency recorded. The dashboard will refresh with the persisted response.");
+                  await refreshNow.current();
                 } catch (requestError) {
                   setError(requestError instanceof Error ? requestError.message : "Manual emergency failed");
                 } finally {
@@ -977,7 +1055,7 @@ function App() {
 
               <div className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[8px] font-bold tracking-wider text-slate-500 shadow-sm ring-1 ring-slate-200/70">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500" />
-                {error ? "STALE DATA" : "LIVE DATA"}
+                {simulatedReadings ? "SIMULATED DATA" : error ? "STALE DATA" : "LIVE DATA"}
               </div>
 
             </div>
@@ -1087,10 +1165,73 @@ function App() {
             </div>
           </section>
 
+          <section className="mt-9 rounded-[20px] border border-cyan-200 bg-cyan-50/70 p-5 sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full bg-cyan-100 px-3 py-1 text-[8px] font-extrabold tracking-[0.16em] text-cyan-800">
+                  DEMO / SIMULATION
+                </div>
+                <h2 className="mt-3 font-[Space_Grotesk] text-base font-bold text-slate-900">Sensor Scenario Controls</h2>
+                <p className="mt-1 text-[10px] leading-5 text-slate-500">Generate test sensor conditions through the same API used by LIFELINE hardware. Values are simulated, not live hardware telemetry.</p>
+                <p className="mt-1 text-[9px] text-slate-500">Device: {deviceId} · POST /api/v1/sensors</p>
+              </div>
+              {simulationPending && <div className="text-[10px] font-bold text-cyan-800">Sending {simulationPending}...</div>}
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {simulationScenarios.map((scenario) => (
+                <div key={scenario.name} className="rounded-xl border border-cyan-100 bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] font-extrabold text-slate-800">{scenario.name}</span>
+                    <button
+                      type="button"
+                      disabled={simulationPending !== null}
+                      onClick={async () => {
+                        setSimulationPending(scenario.name);
+                        setSimulationMessage(null);
+                        try {
+                          const result = await sendSensorData({ device_id: deviceId, ...scenario.payload });
+                          const readingId = result.reading?.id ?? null;
+                          simulatedReadingId.current = readingId;
+                          let storageWarning = "";
+                          try {
+                            if (readingId) localStorage.setItem("lifeline:last-simulation-reading", readingId);
+                          } catch {
+                            storageWarning = " Simulation label is temporary because browser storage is unavailable.";
+                          }
+                          const eventName = result.event?.event_type ?? "no emergency event created";
+                          const actionNames = result.actions?.map((action) => action.action).join(", ") || "no actions persisted";
+                          setSimulationMessage(`${scenario.name} submitted. Backend risk: ${result.risk?.score ?? "unavailable"}/100 ${result.risk?.severity ?? ""}. Persisted event: ${eventName}. Actions: ${actionNames}.${storageWarning}`);
+                          await refreshNow.current();
+                        } catch (simulationError) {
+                          setSimulationMessage(`${scenario.name} failed: ${simulationError instanceof Error ? simulationError.message : "Sensor POST failed"}`);
+                        } finally {
+                          setSimulationPending(null);
+                        }
+                      }}
+                      className="rounded-md bg-slate-950 px-2.5 py-1.5 text-[8px] font-bold text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {simulationPending === scenario.name ? "SENDING" : "SEND"}
+                    </button>
+                  </div>
+                  <div className="mt-2 text-[8px] leading-4 text-slate-500">
+                    G {scenario.payload.gas} · T {scenario.payload.temperature} · H {scenario.payload.humidity} · F {String(scenario.payload.flame)} · M {String(scenario.payload.motion)} · W {scenario.payload.water}
+                  </div>
+                  <div className="mt-1 text-[8px] leading-4 text-slate-600">{scenario.description}</div>
+                </div>
+              ))}
+            </div>
+            {simulationMessage && (
+              <div className={`mt-3 rounded-lg px-3 py-2 text-[10px] ${simulationMessage.includes("failed") ? "bg-red-50 text-red-700" : "bg-white text-slate-600"}`}>
+                {simulationMessage}
+              </div>
+            )}
+          </section>
+
           <section className="mt-9">
             <div className="mb-4">
               <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">Stored outputs</div>
               <h2 className="mt-1 font-[Space_Grotesk] text-lg font-bold text-slate-800">Actuator Status</h2>
+              <p className="mt-1 text-[9px] text-slate-500">Prototype state only. No physical valve, fan, door, alarm, or power hardware is connected.</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               {actuatorItems.map(({ label, value, icon: Icon }) => (
@@ -1277,25 +1418,49 @@ function App() {
                   <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">Incident archive</div>
                   <h1 className="mt-1 font-[Space_Grotesk] text-xl font-bold text-slate-900">Emergency Events</h1>
                 </div>
-                <div className="font-mono text-[10px] text-slate-500">{events.length} RECORDS</div>
+                <div className="font-mono text-[10px] text-slate-500">{filteredEvents.length} RECORDS</div>
               </div>
-              {events.length === 0 ? (
+              <div className="mb-4 flex flex-wrap gap-3">
+                <label className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                  Event type
+                  <select value={selectedEventType} onChange={(event) => setSelectedEventType(event.target.value)} className="ml-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-medium normal-case tracking-normal text-slate-700">
+                    <option value="ALL">All types</option>
+                    <option value="GAS_LEAK">Gas leak</option>
+                    <option value="FIRE">Fire</option>
+                    <option value="WATER_LEAK">Water leak</option>
+                    <option value="INTRUSION">Intrusion</option>
+                    <option value="MANUAL_EMERGENCY">Manual emergency</option>
+                  </select>
+                </label>
+                <label className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                  Status
+                  <select value={selectedEventStatus} onChange={(event) => setSelectedEventStatus(event.target.value)} className="ml-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-medium normal-case tracking-normal text-slate-700">
+                    <option value="ALL">All statuses</option>
+                    <option value="ACTIVE">Active</option>
+                    <option value="RESOLVED">Resolved</option>
+                  </select>
+                </label>
+              </div>
+              {filteredEvents.length === 0 ? (
                 <div className="py-12 text-center text-sm text-slate-500">No emergency events have been recorded for this device.</div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px] border-collapse text-left">
+                  <table className="w-full min-w-[1050px] border-collapse text-left">
                     <thead>
                       <tr className="border-b border-slate-200 text-[8px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                        <th className="px-3 py-3">Event</th><th className="px-3 py-3">Severity</th><th className="px-3 py-3">Risk</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Triggered</th><th className="px-3 py-3">Resolved</th>
+                        <th className="px-3 py-3">Event</th><th className="px-3 py-3">Risk</th><th className="px-3 py-3">Severity</th><th className="px-3 py-3">Device</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Response</th><th className="px-3 py-3">Actions</th><th className="px-3 py-3">Triggered</th><th className="px-3 py-3">Resolved</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {events.map((event) => (
+                      {filteredEvents.map((event) => (
                         <tr key={event.id} className="border-b border-slate-100 text-xs text-slate-700">
                           <td className="px-3 py-4 font-mono font-semibold">{event.event_type}</td>
-                          <td className="px-3 py-4">{event.severity}</td>
                           <td className="px-3 py-4 font-mono">{event.risk_score}/100</td>
+                          <td className="px-3 py-4">{event.severity}</td>
+                          <td className="px-3 py-4 font-mono">{event.device_id}</td>
                           <td className="px-3 py-4">{event.status}</td>
+                          <td className="px-3 py-4">{event.event_type === "MANUAL_EMERGENCY" ? "MANUAL" : "AUTOMATIC"}</td>
+                          <td className="px-3 py-4 text-center">{event.action_count ?? "—"}</td>
                           <td className="px-3 py-4">{new Date(event.triggered_at).toLocaleString()}</td>
                           <td className="px-3 py-4">{event.resolved_at ? new Date(event.resolved_at).toLocaleString() : "—"}</td>
                         </tr>

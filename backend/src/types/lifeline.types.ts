@@ -50,6 +50,12 @@ export interface EmergencyEventRecord {
   status: string;
   triggered_at: string;
   resolved_at: string | null;
+  action_count?: number;
+}
+
+export interface ResolveEmergencyResult {
+  event: EmergencyEventRecord;
+  alreadyResolved: boolean;
 }
 
 export interface DeviceStatusRecord extends DeviceStatus {

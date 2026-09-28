@@ -37,6 +37,11 @@ export function calculateRisk(data: SensorData): RiskResult {
     score += 20;
   }
 
+  if (data.motion && !eventType) {
+    eventType = "INTRUSION";
+    score += 61;
+  }
+
   score = Math.min(score, 100);
 
   let severity: RiskResult["severity"];

@@ -19,7 +19,7 @@ export function handleEmergency(
 ): EmergencyResult {
 
   if (
-    risk.severity !== "CRITICAL" ||
+    (risk.severity !== "CRITICAL" && risk.eventType !== "INTRUSION") ||
     !risk.eventType
   ) {
     return {

@@ -4,6 +4,7 @@ import {
   DeviceStatus,
   EmergencyEventRecord,
   EventActionRecord,
+  ResolveEmergencyResult,
   SensorReadingRecord,
   SensorData,
   RiskResult,
@@ -89,7 +90,24 @@ export async function getEmergencyEvents(
     throw new Error(`Failed to fetch emergency events: ${error.message}`);
   }
 
-  return (data ?? []) as EmergencyEventRecord[];
+  const events = (data ?? []) as EmergencyEventRecord[];
+  if (events.length === 0) return events;
+
+  const { data: actionRows, error: actionError } = await supabase
+    .from("event_actions")
+    .select("event_id")
+    .in("event_id", events.map((event) => event.id));
+
+  if (actionError) {
+    throw new Error(`Failed to fetch event action counts: ${actionError.message}`);
+  }
+
+  const counts = new Map<string, number>();
+  for (const row of actionRows ?? []) {
+    counts.set(row.event_id, (counts.get(row.event_id) ?? 0) + 1);
+  }
+
+  return events.map((event) => ({ ...event, action_count: counts.get(event.id) ?? 0 }));
 }
 
 export async function getActiveEmergencyEvent(
@@ -109,6 +127,45 @@ export async function getActiveEmergencyEvent(
   }
 
   return data as EmergencyEventRecord | null;
+}
+
+export async function resolveEmergencyEvent(
+  eventId: string
+): Promise<ResolveEmergencyResult | null> {
+  const { data: updated, error: updateError } = await supabase
+    .from("emergency_events")
+    .update({ status: "RESOLVED", resolved_at: new Date().toISOString() })
+    .eq("id", eventId)
+    .eq("status", "ACTIVE")
+    .select("*")
+    .maybeSingle();
+
+  if (updateError) {
+    throw new Error(`Failed to resolve emergency: ${updateError.message}`);
+  }
+
+  if (updated) {
+    return { event: updated as EmergencyEventRecord, alreadyResolved: false };
+  }
+
+  const { data: existing, error: selectError } = await supabase
+    .from("emergency_events")
+    .select("*")
+    .eq("id", eventId)
+    .maybeSingle();
+
+  if (selectError) {
+    throw new Error(`Failed to look up emergency: ${selectError.message}`);
+  }
+
+  if (!existing) {
+    return null;
+  }
+
+  const event = existing as EmergencyEventRecord;
+  return event.status === "RESOLVED"
+    ? { event, alreadyResolved: true }
+    : null;
 }
 
 export async function getStoredDeviceStatus(

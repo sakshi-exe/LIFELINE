@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 
 export interface SensorPayload {
   device_id: string;
@@ -25,6 +25,7 @@ export interface EmergencyEvent {
   status: string;
   triggered_at: string;
   resolved_at: string | null;
+  action_count?: number;
 }
 
 export interface StoredDeviceStatus {
@@ -58,7 +59,15 @@ export interface HealthResponse {
   status: string;
 }
 
-export interface SensorResponse extends ApiEnvelope<SensorReading> {}
+export interface SensorRisk {
+  score: number;
+  severity: "NORMAL" | "WARNING" | "CRITICAL";
+  eventType?: string;
+}
+
+export interface SensorResponse extends ApiEnvelope<SensorReading> {
+  risk: SensorRisk | null;
+}
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -85,10 +94,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function checkBackendHealth(signal?: AbortSignal): Promise<HealthResponse> {
-  return request<HealthResponse>("/health", { signal });
+  return fetch(`${API_BASE_URL}/health`, { signal }).then(async (response) => {
+    const result = await response.json().catch(() => ({})) as HealthResponse;
+    if (response.status === 503 && result.status === "degraded") return result;
+    if (!response.ok) throw new ApiError(`Backend health check failed: ${response.status}`, response.status);
+    return result;
+  });
 }
 
-export function sendSensorData(payload: SensorPayload): Promise<unknown> {
+export function resolveEmergency(eventId: string): Promise<ApiEnvelope<EmergencyEvent> & { alreadyResolved?: boolean }> {
+  return request(`/api/v1/events/${encodeURIComponent(eventId)}/resolve`, {
+    method: "PATCH",
+  });
+}
+
+export interface SensorPostResponse {
+  success: boolean;
+  reading?: SensorReading;
+  risk?: SensorRisk;
+  event?: EmergencyEvent | null;
+  actions?: EventAction[];
+}
+
+export function sendSensorData(payload: SensorPayload): Promise<SensorPostResponse> {
   return request("/api/v1/sensors", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -174,7 +202,7 @@ export async function getEventActions(
   return response.data;
 }
 
-export function triggerManualEmergency(deviceId: string): Promise<unknown> {
+export function triggerManualEmergency(deviceId: string): Promise<{ success: boolean }> {
   return request(`/api/v1/events/${encodeURIComponent(deviceId)}/manual`, {
     method: "POST",
   });

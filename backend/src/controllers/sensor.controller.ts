@@ -12,12 +12,21 @@ import {
   saveDeviceStatus,
   saveEventAction,
 } from "../services/supabase.service";
-import { isValidDeviceId, parseListLimit } from "../utils/validators";
+import {
+  isValidDeviceId,
+  parseListLimit,
+  SENSOR_PAYLOAD_ERROR,
+  validateSensorPayload,
+} from "../utils/validators";
 
 export async function receiveSensorData(
   req: Request,
   res: Response
 ) {
+    if (!validateSensorPayload(req.body)) {
+      return res.status(400).json({ success: false, message: SENSOR_PAYLOAD_ERROR });
+    }
+
   try {
     const sensorData = req.body;
 
@@ -118,10 +127,11 @@ export async function getLatestSensorData(
       });
     }
 
-    return res.json({
-      success: true,
-      data: reading,
-    });
+      return res.json({
+        success: true,
+        data: reading,
+        risk: reading ? calculateRisk(reading) : null,
+      });
   } catch (error) {
     console.error(
       "Latest sensor fetch error:",
