@@ -16,10 +16,22 @@ app.get("/health", async (_req, res) => {
     const { error } = await supabase
       .from("sensor_readings")
       .select("id", { head: true, count: "exact" });
+
     if (error) throw error;
-    return res.json({ success: true, service: "LIFELINE backend", status: "healthy", database: "connected" });
+
+    return res.json({
+      success: true,
+      service: "LIFELINE backend",
+      status: "healthy",
+      database: "connected",
+    });
   } catch {
-    return res.status(503).json({ success: false, service: "LIFELINE backend", status: "degraded", database: "unavailable" });
+    return res.status(503).json({
+      success: false,
+      service: "LIFELINE backend",
+      status: "degraded",
+      database: "unavailable",
+    });
   }
 });
 
@@ -30,6 +42,7 @@ app.use("/api/v1/realtime", realtimeRoutes);
 
 startRealtimeBridge();
 
-app.listen(PORT, () => {
-  console.log(`🚨 LIFELINE backend running on http://localhost:${PORT}`);
+// Listen on all network interfaces so ESP32/other LAN devices can connect
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚨 LIFELINE backend running on http://0.0.0.0:${PORT}`);
 });

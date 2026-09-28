@@ -22,12 +22,6 @@ export function getEmergencyProtocol(
         "ALARM_ON",
       ];
 
-    case "WATER_LEAK":
-      return [
-        "POWER_ISOLATION_ON",
-        "ALARM_ON",
-      ];
-
     case "INTRUSION":
       return [
         "ALARM_ON",

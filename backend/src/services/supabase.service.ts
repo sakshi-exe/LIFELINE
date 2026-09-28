@@ -22,7 +22,6 @@ export async function saveSensorReading(
       humidity: data.humidity,
       flame: data.flame,
       motion: data.motion,
-      water: data.water,
       created_at: data.timestamp || new Date().toISOString(),
     })
     .select()

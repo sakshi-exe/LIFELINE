@@ -1,7 +1,6 @@
 export type EmergencyType =
   | "GAS_LEAK"
   | "FIRE"
-  | "WATER_LEAK"
   | "INTRUSION"
   | "MANUAL_EMERGENCY";
 
@@ -17,7 +16,6 @@ export interface SensorData {
   humidity: number;
   flame: boolean;
   motion: boolean;
-  water: number;
   timestamp?: string;
 }
 

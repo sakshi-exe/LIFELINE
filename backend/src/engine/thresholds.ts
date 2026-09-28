@@ -9,8 +9,4 @@ export const THRESHOLDS = {
     critical: 50,
   },
 
-  water: {
-    warning: 30,
-    critical: 60,
-  },
 };
