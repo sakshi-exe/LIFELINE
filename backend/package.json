@@ -1,0 +1,16 @@
+{
+	"name": "lifeline-backend",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"build": "tsc -p tsconfig.json"
+	},
+	"dependencies": {
+		"express": "^4.21.2"
+	},
+	"devDependencies": {
+		"@types/express": "^4.17.21",
+		"@types/node": "^22.15.30",
+		"typescript": "^5.8.3"
+	}
+}
