@@ -123,29 +123,38 @@ function App() {
         return;
       }
       refreshing = true;
-      const [health, sensor, eventList, active, status, history] = await Promise.allSettled([
+      const sensorRequest = getSensorData(deviceId, controller.signal);
+      const backgroundRequest = Promise.allSettled([
         checkBackendHealth(controller.signal),
-        getSensorData(deviceId, controller.signal),
         getEmergencyEvents(deviceId, 20, controller.signal),
         getActiveEmergency(deviceId, controller.signal),
         getDeviceStatus(deviceId, controller.signal),
         getSensorHistory(deviceId, 30, controller.signal),
       ]);
 
+      try {
+        const sensor = await sensorRequest;
+        if (mounted && !controller.signal.aborted) {
+          setSensorData(sensor.data);
+          setSensorRisk(sensor.risk);
+          setSimulatedReadings(sensor.data.id === simulatedReadingId.current);
+          setError(null);
+          setLastUpdated(new Date());
+          setLoading(false);
+        }
+      } catch (sensorFailure) {
+        if (mounted && !controller.signal.aborted) {
+          setError(sensorFailure instanceof Error ? sensorFailure.message : "Sensor API unavailable");
+          setLoading(false);
+        }
+      }
+
+      const [health, eventList, active, status, history] = await backgroundRequest;
       if (mounted && !controller.signal.aborted) {
         if (health.status === "fulfilled") {
           setBackendState(health.value.status === "healthy" ? "online" : "degraded");
         } else {
           setBackendState("offline");
-        }
-        if (sensor.status === "fulfilled") {
-          setSensorData(sensor.value.data);
-          setSensorRisk(sensor.value.risk);
-          setSimulatedReadings(sensor.value.data.id === simulatedReadingId.current);
-          setError(null);
-          setLastUpdated(new Date());
-        } else {
-          setError(sensor.reason instanceof Error ? sensor.reason.message : "Sensor API unavailable");
         }
         if (eventList.status === "fulfilled" && active.status === "fulfilled") {
           setEvents(eventList.value);
@@ -167,7 +176,6 @@ function App() {
         }
         if (status.status === "fulfilled") setDeviceStatus(status.value);
         if (history.status === "fulfilled") setSensorHistory([...history.value].reverse());
-        setLoading(false);
       }
 
       refreshing = false;
