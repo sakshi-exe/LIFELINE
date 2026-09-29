@@ -9,6 +9,8 @@ import {
   getLatestSensorReading,
   getSensorHistory,
   createEmergencyEvent,
+  getActiveEmergencyEvent,
+  resolveEmergencyEvent,
   saveDeviceStatus,
   saveEventAction,
 } from "../services/supabase.service";
@@ -47,30 +49,67 @@ export async function receiveSensorData(
 
     const actions: unknown[] = [];
 
-    // 4. Persist emergency event + actions
+    // 4. Emergency event lifecycle
     if (
       emergency.triggered &&
       emergency.eventType
     ) {
-      event = await createEmergencyEvent(
-        sensorData.device_id,
-        risk
+      const activeEvent = await getActiveEmergencyEvent(
+        sensorData.device_id
       );
 
-      if (emergency.deviceStatus) {
-        deviceStatus = await saveDeviceStatus(
-          emergency.deviceStatus
+      if (
+        activeEvent &&
+        activeEvent.event_type === emergency.eventType
+      ) {
+        // Same emergency is already active.
+        // Do not create duplicate event/action records.
+        event = activeEvent;
+
+        console.log(
+          `ℹ️ ${sensorData.device_id}: ${emergency.eventType} already ACTIVE`
         );
-      }
+      } else {
+        // New emergency detected.
+        event = await createEmergencyEvent(
+          sensorData.device_id,
+          risk
+        );
 
-      if (event) {
-        for (const action of emergency.actions) {
-          const savedAction = await saveEventAction(
-            event.id,
-            action
+        if (emergency.deviceStatus) {
+          deviceStatus = await saveDeviceStatus(
+            emergency.deviceStatus
           );
+        }
 
-          actions.push(savedAction);
+        if (event) {
+          for (const action of emergency.actions) {
+            const savedAction = await saveEventAction(
+              event.id,
+              action
+            );
+
+            actions.push(savedAction);
+          }
+        }
+      }
+    } else {
+      // No emergency condition anymore.
+      const activeEvent = await getActiveEmergencyEvent(
+        sensorData.device_id
+      );
+
+      if (activeEvent) {
+        const resolved = await resolveEmergencyEvent(
+          activeEvent.id
+        );
+
+        if (resolved) {
+          event = resolved.event;
+
+          console.log(
+            `✅ ${sensorData.device_id}: ${activeEvent.event_type} RESOLVED`
+          );
         }
       }
     }

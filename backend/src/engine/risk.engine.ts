@@ -23,9 +23,9 @@ export function calculateRisk(data: SensorData): RiskResult {
     score += 15;
   }
 
-  // FLAME
+  // FLAME — immediate fire emergency
   if (data.flame) {
-    score += 40;
+    score += 61;
     eventType = "FIRE";
   }
 
