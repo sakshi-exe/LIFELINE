@@ -1,13 +1,23 @@
 import express from "express";
+import cors from "cors";
+
 import emergencyRoutes from "./routes/emergency.routes";
 import sensorRoutes from "./routes/sensor.routes";
 import statusRoutes from "./routes/status.routes";
 import realtimeRoutes from "./routes/realtime.routes";
+
 import { supabase } from "./config/supabase";
 import { startRealtimeBridge } from "./services/realtime.service";
 
 const app = express();
 const PORT = 5050;
+
+// Allow the React/Vite dashboard to access the backend
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+  })
+);
 
 app.use(express.json());
 

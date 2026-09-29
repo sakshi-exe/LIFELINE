@@ -1264,7 +1264,7 @@ function App() {
               <HistorySparkline label="Gas" unit="%" values={sensorHistory.map((reading) => reading.gas)} color="#ef4444" />
               <HistorySparkline label="Temperature" unit="°C" values={sensorHistory.map((reading) => reading.temperature)} color="#f59e0b" />
               <HistorySparkline label="Humidity" unit="%" values={sensorHistory.map((reading) => reading.humidity)} color="#0891b2" />
-              <HistorySparkline label="Water" unit="%" values={sensorHistory.map((reading) => reading.water)} color="#2563eb" />
+
             </div>
           </section>
 
